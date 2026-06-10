@@ -1,0 +1,28 @@
+# Build outputs
+build/
+out/
+*.apk
+*.aab
+*.msi
+*.exe
+*.dmg
+*.deb
+*.rpm
+
+# IDE
+.idea/
+*.iml
+.gradle/
+local.properties
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Kotlin
+*.class
+
+# Project-specific
+.novelreader/
+local.properties
