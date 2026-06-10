@@ -12,11 +12,12 @@ import com.richardyap.novelreader.models.Bookmark
 import com.richardyap.novelreader.models.ReaderPrefs
 import com.richardyap.novelreader.models.SyncPrefs
 import com.richardyap.novelreader.util.ChapterParser
+import com.richardyap.novelreader.util.EncodingDetector
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.BufferedReader
 import java.io.File
-import java.io.InputStreamReader
+import java.io.FileInputStream
+import java.nio.charset.Charset
 import java.util.UUID
 
 /**
@@ -289,10 +290,37 @@ class AndroidFileRepository(
         return if (path.startsWith("content://")) {
             val uri = Uri.parse(path)
             context.contentResolver.openInputStream(uri)?.use { inputStream ->
-                BufferedReader(InputStreamReader(inputStream, Charsets.UTF_8)).readText()
+                readTextWithDetection(inputStream)
             } ?: throw IllegalStateException("无法读取文件: $path")
         } else {
-            File(path).readText(Charsets.UTF_8)
+            readTextWithDetection(File(path))
+        }
+    }
+
+    private fun readTextWithDetection(file: File): String {
+        val headBytes = FileInputStream(file).use { fis ->
+            val size = minOf(4096L, file.length()).toInt().coerceAtLeast(1)
+            val buf = ByteArray(size)
+            val read = fis.read(buf)
+            if (read < 0) ByteArray(0) else buf.copyOf(read)
+        }
+
+        val charset = guessCharset(headBytes)
+        return file.readText(charset)
+    }
+
+    private fun readTextWithDetection(inputStream: java.io.InputStream): String {
+        val bytes = inputStream.readBytes()
+        val charset = guessCharset(bytes)
+        return String(bytes, charset)
+    }
+
+    private fun guessCharset(headBytes: ByteArray): Charset {
+        val encoding = EncodingDetector.guessEncoding(headBytes)
+        return try {
+            Charset.forName(encoding)
+        } catch (_: Exception) {
+            Charsets.UTF_8
         }
     }
 }

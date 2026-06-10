@@ -328,71 +328,69 @@ class DesktopFileRepository : FileRepository {
      * EPUB 本质是 ZIP 文件，内含 .xhtml/.html 章节。
      */
     private fun parseEpub(epubFile: File): List<Chapter> {
-        val zip = ZipFile(epubFile)
-        val entries = zip.entries().asSequence().toList()
+        ZipFile(epubFile).use { zip ->
+            val entries = zip.entries().asSequence().toList()
 
-        // 收集所有 .xhtml 和 .html 文件
-        val contentEntries = entries.filter { entry ->
-            val name = entry.name.lowercase()
-            !entry.isDirectory && (name.endsWith(".xhtml") || name.endsWith(".html") || name.endsWith(".htm"))
-        }.sortedBy { it.name }
+            // 收集所有 .xhtml 和 .html 文件
+            val contentEntries = entries.filter { entry ->
+                val name = entry.name.lowercase()
+                !entry.isDirectory && (name.endsWith(".xhtml") || name.endsWith(".html") || name.endsWith(".htm"))
+            }.sortedBy { it.name }
 
-        if (contentEntries.isEmpty()) {
-            // 没有 HTML 文件，尝试读取所有文本内容
-            val allText = entries.filter { !it.isDirectory }
-                .joinToString("\n") { entry ->
-                    try {
-                        zip.getInputStream(entry).bufferedReader().readText()
-                    } catch (e: Exception) {
-                        ""
+            if (contentEntries.isEmpty()) {
+                // 没有 HTML 文件，尝试读取所有文本内容
+                val allText = entries.filter { !it.isDirectory }
+                    .joinToString("\n") { entry ->
+                        try {
+                            zip.getInputStream(entry).bufferedReader().readText()
+                        } catch (e: Exception) {
+                            ""
+                        }
                     }
+                val cleaned = ChapterParser.cleanText(allText)
+                return ChapterParser.splitChapters(cleaned)
+            }
+
+            val chapters = mutableListOf<Chapter>()
+            var chapterIndex = 0
+
+            for (entry in contentEntries) {
+                try {
+                    val rawText = zip.getInputStream(entry).bufferedReader().readText()
+                    // 提取 body 中的文本
+                    val text = extractTextFromHtml(rawText)
+                    val cleaned = ChapterParser.cleanText(text)
+
+                    if (cleaned.isBlank()) continue
+
+                    // 尝试从文件名或内容中提取标题
+                    val title = extractTitleFromHtml(rawText)
+                        ?: entry.name.substringAfterLast('/').substringBeforeLast('.')
+
+                    chapters.add(
+                        Chapter(
+                            title = title,
+                            body = cleaned,
+                            index = chapterIndex++,
+                        )
+                    )
+                } catch (e: Exception) {
+                    e.printStackTrace()
                 }
-            zip.close()
-            val cleaned = ChapterParser.cleanText(allText)
-            return ChapterParser.splitChapters(cleaned)
-        }
+            }
 
-        val chapters = mutableListOf<Chapter>()
-        var chapterIndex = 0
-
-        for (entry in contentEntries) {
-            try {
-                val rawText = zip.getInputStream(entry).bufferedReader().readText()
-                // 提取 body 中的文本
-                val text = extractTextFromHtml(rawText)
-                val cleaned = ChapterParser.cleanText(text)
-
-                if (cleaned.isBlank()) continue
-
-                // 尝试从文件名或内容中提取标题
-                val title = extractTitleFromHtml(rawText)
-                    ?: entry.name.substringAfterLast('/').substringBeforeLast('.')
-
-                chapters.add(
+            if (chapters.isEmpty()) {
+                return listOf(
                     Chapter(
-                        title = title,
-                        body = cleaned,
-                        index = chapterIndex++,
+                        title = "正文",
+                        body = "（无法解析 EPUB 内容）",
+                        index = 0,
                     )
                 )
-            } catch (e: Exception) {
-                e.printStackTrace()
             }
+
+            return chapters
         }
-
-        zip.close()
-
-        if (chapters.isEmpty()) {
-            return listOf(
-                Chapter(
-                    title = "正文",
-                    body = "（无法解析 EPUB 内容）",
-                    index = 0,
-                )
-            )
-        }
-
-        return chapters
     }
 
     /**
@@ -413,6 +411,9 @@ class DesktopFileRepository : FileRepository {
     private fun extractTextFromHtml(html: String): String {
         // 将常见块级元素替换为换行
         var text = html
+            .replace(Regex("""<head[^>]*>.*?</head>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
+            .replace(Regex("""<script[^>]*>.*?</script>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
+            .replace(Regex("""<style[^>]*>.*?</style>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
             .replace(Regex("""<br\s*/?>""", RegexOption.IGNORE_CASE), "\n")
             .replace(Regex("""</?p[^>]*>""", RegexOption.IGNORE_CASE), "\n")
             .replace(Regex("""</?div[^>]*>""", RegexOption.IGNORE_CASE), "\n")
@@ -421,10 +422,6 @@ class DesktopFileRepository : FileRepository {
 
         // 移除所有 HTML 标签
         text = text.replace(Regex("""<[^>]+>"""), "")
-        // 移除 head 和 script 内容
-        text = text.replace(Regex("""<head[^>]*>.*?</head>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
-        text = text.replace(Regex("""<script[^>]*>.*?</script>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
-        text = text.replace(Regex("""<style[^>]*>.*?</style>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
 
         // HTML 实体解码
         text = text
